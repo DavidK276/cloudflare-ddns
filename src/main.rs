@@ -198,7 +198,12 @@ fn main() -> Result<(), CfDdnsError> {
         Ok(l) => l,
         Err(l) => l,
     };
-    let log_file_path = format!("{}/log/{}.log", cwd.to_string_lossy(), zone.name);
+    let log_dir_path = format!("{}/log", cwd.to_string_lossy());
+    match fs::read_dir(&log_dir_path) {
+        Ok(_) => (),
+        Err(_) => fs::create_dir(format!("{}/log", cwd.to_string_lossy()))?,
+    };
+    let log_file_path = format!("{}/{}.log", log_dir_path, zone.name);
     let log_file = fs::OpenOptions::new()
         .create(true)
         .append(true)

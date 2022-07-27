@@ -147,7 +147,7 @@ fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDd
         .send()?;
     let cf_res_a: CfResponse = serde_json::from_str(res_a.as_str()?)?;
     if !cf_res_a.success {
-        panic!("Failed retrieving zone records: {}", res_a.as_str()?);
+        panic!("Failed retrieving A zone records: {}", res_a.as_str()?);
     }
     let mut result_a: HashMap<String, CfRecord> = HashMap::new();
     for record_obj in cf_res_a.result {
@@ -160,6 +160,9 @@ fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDd
         .with_param("type", "AAAA")
         .send()?;
     let cf_res_aaaa: CfResponse = serde_json::from_str(res_aaaa.as_str()?)?;
+    if !cf_res_aaaa.success {
+        panic!("Failed retrieving AAAA zone records: {}", res_aaaa.as_str()?);
+    }
     let mut result_aaaa: HashMap<String, CfRecord> = HashMap::new();
     for record_obj in cf_res_aaaa.result {
         let record: CfRecord = serde_json::from_value(record_obj)?;

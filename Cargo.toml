@@ -11,6 +11,7 @@ serde_json = "1.0"
 thiserror = "1.0"
 log = "0.4"
 simplelog = "0.12"
+time = "0.3"
 rsdns = { version = "0.13", features = ["net-std"] }
 clap = { version = "3.2", features = ["derive"] }
 minreq = { version = "2.6", features = ["https-bundled-probe", "json-using-serde"] }

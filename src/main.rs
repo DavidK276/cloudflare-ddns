@@ -4,7 +4,7 @@ use rsdns::clients as dns;
 use rsdns::{constants::Class, records::data::Aaaa, records::data::A};
 use serde::Deserialize;
 use serde_json::json;
-use simplelog::{ColorChoice, CombinedLogger, LevelFilter, TermLogger, TerminalMode, WriteLogger};
+use simplelog::{ColorChoice, CombinedLogger, LevelFilter, TermLogger, TerminalMode, WriteLogger, format_description};
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::fs;
@@ -46,6 +46,7 @@ enum IPVersion {
     #[serde(rename = "AAAA")]
     IPv6,
 }
+
 impl IPVersion {
     fn record_type(&self) -> String {
         match self {
@@ -139,6 +140,7 @@ fn get_current_ip(version: IPVersion, method: &str) -> Result<IpAddr, CfDdnsErro
 }
 
 type DnsRecords = (HashMap<String, CfRecord>, HashMap<String, CfRecord>);
+
 fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDdnsError> {
     let url = format!("{}{}/dns_records", API_ENDPOINT, zone_uuid);
     let res_a = minreq::get(&url)
@@ -186,25 +188,27 @@ fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, CfDdnsE
 }
 
 fn main() -> Result<(), CfDdnsError> {
-    let cwd = current_dir()?;
+    let cwd = current_dir()?.to_string_lossy().to_string();
     let zone = Zone::parse();
     let path = match zone.path {
         Some(value) => value,
-        None => format!("{}/zones/{}.json", cwd.to_string_lossy(), zone.name),
+        None => format!("{}/zones/{}.json", &cwd, zone.name),
     };
     let file_str = File::open(path)?;
     let config: CfDnsConfig = serde_json::from_reader(&file_str)?;
 
     let log_level: LevelFilter = LevelFilter::from_str(config.log_level.as_str())?;
     let mut logger_config = simplelog::ConfigBuilder::new();
+    logger_config.set_time_format_custom(
+        format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
     match logger_config.set_time_offset_to_local() {
         Ok(l) => l,
         Err(l) => l,
     };
-    let log_dir_path = format!("{}/log", cwd.to_string_lossy());
+    let log_dir_path = format!("{}/log", &cwd);
     match fs::read_dir(&log_dir_path) {
         Ok(_) => (),
-        Err(_) => fs::create_dir(format!("{}/log", cwd.to_string_lossy()))?,
+        Err(_) => fs::create_dir(format!("{}/log", &cwd))?,
     };
     let log_file_path = format!("{}/{}.log", log_dir_path, zone.name);
     let log_file = fs::OpenOptions::new()
@@ -223,7 +227,6 @@ fn main() -> Result<(), CfDdnsError> {
 
     let zone_info = get_zone_info(&zone.name, &config.api_token)?;
     debug!("Zone {} info retrieved", zone_info.name);
-
     let (records_a, records_aaaa) = get_zone_records(&zone_info.id, &config.api_token)?;
     debug!(
         "Zone {} records retrieved, A: {}, AAAA: {}",

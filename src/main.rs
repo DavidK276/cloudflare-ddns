@@ -1,16 +1,17 @@
-use clap::Parser;
-use log::{debug, error, info, warn};
-use rsdns::clients as dns;
-use rsdns::{constants::Class, records::data::Aaaa, records::data::A};
-use serde::Deserialize;
-use serde_json::json;
-use simplelog::{ColorChoice, CombinedLogger, LevelFilter, TermLogger, TerminalMode, WriteLogger, format_description};
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::fs;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
+
+use clap::Parser;
+use log::{debug, error, info, warn};
+use rsdns::{constants::Class, records::data::A, records::data::Aaaa};
+use rsdns::clients as dns;
+use serde::Deserialize;
+use serde_json::json;
+use simplelog::{ColorChoice, CombinedLogger, format_description, LevelFilter, TerminalMode, TermLogger, WriteLogger};
 
 const API_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/zones/";
 

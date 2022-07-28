@@ -128,7 +128,7 @@ fn get_current_ip(version: IPVersion, method: &str) -> Result<IpAddr, CfDdnsErro
             }
             "dns" => {
                 let nameserver =
-                    SocketAddr::new(IpAddr::V6(Ipv6Addr::new(2620, 0, 0xccc, 0, 0, 0, 0, 2)), 53);
+                    SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0x2620, 0, 0xccc, 0, 0, 0, 0, 0x2)), 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
                 let rrset =

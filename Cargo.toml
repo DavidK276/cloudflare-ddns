@@ -14,8 +14,13 @@ simplelog = "0.12"
 time = "0.3"
 rsdns = { version = "0.13", features = ["net-std"] }
 clap = { version = "3.2", features = ["derive"] }
-minreq = { version = "2.6", features = ["https-bundled-probe", "json-using-serde"] }
 serde = { version = "1.0", features = ["derive"] }
+
+[target.'cfg(not(target_arch = "mips"))'.dependencies]
+minreq = { version = "~2.6", features = ["https-rustls-probe", "json-using-serde"] }
+
+[target.mips-unknown-linux-musl.dependencies]
+minreq = { version = "~2.6", features = ["https-bundled-probe", "json-using-serde"] }
 
 [profile.release]
 opt-level = 'z'

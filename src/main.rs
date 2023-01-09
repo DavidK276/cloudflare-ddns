@@ -7,13 +7,22 @@ use std::str::FromStr;
 
 use clap::Parser;
 use log::{debug, error, info, warn};
-use rsdns::{constants::Class, records::data::A, records::data::Aaaa};
 use rsdns::clients as dns;
+use rsdns::{constants::Class, records::data::Aaaa, records::data::A};
 use serde::Deserialize;
 use serde_json::json;
-use simplelog::{ColorChoice, CombinedLogger, format_description, LevelFilter, TerminalMode, TermLogger, WriteLogger};
+use simplelog::{
+    format_description, ColorChoice, CombinedLogger, LevelFilter, TermLogger, TerminalMode,
+    WriteLogger,
+};
 
 const API_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/zones/";
+const HTTP_RESOLVER_IPV4: &str = "https://ipv4.icanhazip.com";
+const HTTP_RESOLVER_IPV6: &str = "https://ipv6.icanhazip.com";
+const DNS_RESOLVER_IPV4_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(208, 67, 222, 222));
+const DNS_RESOLVER_IPV4_QUERY: &str = "myip.opendns.com";
+const DNS_RESOLVER_IPV6_IP: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2620, 0, 0xccc, 0, 0, 0, 0, 0x2));
+const DNS_RESOLVER_IPV6_QUERY: &str = "resolver1.ipv6-sandbox.opendns.com";
 
 #[derive(thiserror::Error, Debug)]
 enum CfDdnsError {
@@ -36,7 +45,7 @@ enum CfDdnsError {
 struct Zone {
     #[clap(short = 'z', long = "zone", value_parser)]
     name: String,
-    #[clap(short = 'c', long = "config", value_parser, forbid_empty_values = true)]
+    #[clap(short = 'c', long = "config", value_parser)]
     path: Option<String>,
 }
 
@@ -98,41 +107,39 @@ struct CfDnsConfig {
 }
 
 fn bearer_auth(api_token: &str) -> String {
-    return format!("Bearer {}", api_token);
+    format!("Bearer {}", api_token)
 }
 
 fn get_current_ip(version: IPVersion, method: &str) -> Result<IpAddr, CfDdnsError> {
     return match version {
         IPVersion::IPv4 => match method {
             "http" => {
-                let res = minreq::get("https://ipv4.icanhazip.com").send()?;
+                let res = minreq::get(HTTP_RESOLVER_IPV4).send()?;
                 Ok(IpAddr::V4(
                     res.as_str()?.trim().to_string().parse().unwrap(),
                 ))
             }
             "dns" => {
-                let nameserver = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(208, 67, 222, 222)), 53);
+                let nameserver = SocketAddr::new(DNS_RESOLVER_IPV4_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
-                let rrset = client.query_rrset::<A>("myip.opendns.com", Class::In)?;
+                let rrset = client.query_rrset::<A>(DNS_RESOLVER_IPV4_QUERY, Class::In)?;
                 Ok(IpAddr::V4(rrset.rdata[0].address))
             }
             _ => panic!("Invalid resolving method in config"),
         },
         IPVersion::IPv6 => match method {
             "http" => {
-                let res = minreq::get("https://ipv6.icanhazip.com").send()?;
+                let res = minreq::get(HTTP_RESOLVER_IPV6).send()?;
                 Ok(IpAddr::V6(
                     res.as_str()?.trim().to_string().parse().unwrap(),
                 ))
             }
             "dns" => {
-                let nameserver =
-                    SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0x2620, 0, 0xccc, 0, 0, 0, 0, 0x2)), 53);
+                let nameserver = SocketAddr::new(DNS_RESOLVER_IPV6_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
-                let rrset =
-                    client.query_rrset::<Aaaa>("resolver1.ipv6-sandbox.opendns.com", Class::In)?;
+                let rrset = client.query_rrset::<Aaaa>(DNS_RESOLVER_IPV6_QUERY, Class::In)?;
                 Ok(IpAddr::V6(rrset.rdata[0].address))
             }
             _ => panic!("Invalid resolving method in config"),
@@ -153,6 +160,7 @@ fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDd
         panic!("Failed retrieving A zone records: {}", res_a.as_str()?);
     }
     let mut result_a: HashMap<String, CfRecord> = HashMap::new();
+    result_a.reserve(cf_res_a.result.len());
     for record_obj in cf_res_a.result {
         let record: CfRecord = serde_json::from_value(record_obj)?;
         result_a.insert(record.name.clone(), record);
@@ -164,9 +172,13 @@ fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDd
         .send()?;
     let cf_res_aaaa: CfResponse = serde_json::from_str(res_aaaa.as_str()?)?;
     if !cf_res_aaaa.success {
-        panic!("Failed retrieving AAAA zone records: {}", res_aaaa.as_str()?);
+        panic!(
+            "Failed retrieving AAAA zone records: {}",
+            res_aaaa.as_str()?
+        );
     }
     let mut result_aaaa: HashMap<String, CfRecord> = HashMap::new();
+    result_aaaa.reserve(cf_res_aaaa.result.len());
     for record_obj in cf_res_aaaa.result {
         let record: CfRecord = serde_json::from_value(record_obj)?;
         result_aaaa.insert(record.name.clone(), record);
@@ -183,25 +195,17 @@ fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, CfDdnsE
     if !cf_res.success {
         panic!("Failed retrieving zone info: {}", res.as_str()?);
     }
-    let zone_obj = cf_res.result[0].to_owned();
+    let zone_obj = cf_res.result[0].clone();
     let zone_info: CfZoneInfo = serde_json::from_value(zone_obj)?;
     Ok(zone_info)
 }
 
-fn main() -> Result<(), CfDdnsError> {
-    let cwd = current_dir()?.to_string_lossy().to_string();
-    let zone = Zone::parse();
-    let path = match zone.path {
-        Some(value) => value,
-        None => format!("{}/zones/{}.json", &cwd, zone.name),
-    };
-    let file_str = File::open(path)?;
-    let config: CfDnsConfig = serde_json::from_reader(&file_str)?;
-
-    let log_level: LevelFilter = LevelFilter::from_str(config.log_level.as_str())?;
+fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), CfDdnsError> {
+    let log_level = LevelFilter::from_str(log_level)?;
     let mut logger_config = simplelog::ConfigBuilder::new();
-    logger_config.set_time_format_custom(
-        format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
+    logger_config.set_time_format_custom(format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
+    ));
     match logger_config.set_time_offset_to_local() {
         Ok(l) => l,
         Err(l) => l,
@@ -211,7 +215,7 @@ fn main() -> Result<(), CfDdnsError> {
         Ok(_) => (),
         Err(_) => fs::create_dir(format!("{}/log", &cwd))?,
     };
-    let log_file_path = format!("{}/{}.log", log_dir_path, zone.name);
+    let log_file_path = format!("{}/{}.log", log_dir_path, zone_name);
     let log_file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -225,6 +229,20 @@ fn main() -> Result<(), CfDdnsError> {
             ColorChoice::Auto,
         ),
     ])?;
+   Ok(())
+}
+
+fn main() -> Result<(), CfDdnsError> {
+    let cwd = current_dir()?.to_string_lossy().to_string();
+    let zone = Zone::parse();
+    let path = match zone.path {
+        Some(value) => value,
+        None => format!("{}/zones/{}.json", &cwd, zone.name),
+    };
+    let file_str = File::open(path)?;
+    let config: CfDnsConfig = serde_json::from_reader(&file_str)?;
+
+    logger_init(config.log_level.as_str(), cwd.as_str(), zone.name.as_str())?;
 
     let zone_info = get_zone_info(&zone.name, &config.api_token)?;
     debug!("Zone {} info retrieved", zone_info.name);
@@ -246,6 +264,7 @@ fn main() -> Result<(), CfDdnsError> {
     } else {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     };
+
     let mut updates = [0u16; 3];
     for config_record in config.records {
         let name: String = if config_record.name == "@" {
@@ -310,20 +329,17 @@ fn main() -> Result<(), CfDdnsError> {
             .with_json(&body)?
             .send()?;
         let cf_response: serde_json::Value = serde_json::from_str(res.as_str()?)?;
-        match cf_response["success"].as_bool() {
-            Some(success) => {
-                if success {
-                    debug!("Update successful");
-                    updates[0] += 1;
-                } else {
-                    warn!(
-                        "Update of record {} with content {} failed",
-                        record.name, new_ip
-                    );
-                    updates[1] += 1;
-                }
+        if let Some(success) = cf_response["success"].as_bool() {
+            if success {
+                debug!("Update successful");
+                updates[0] += 1;
+            } else {
+                warn!(
+                    "Update of record {} with content {} failed",
+                    record.name, new_ip
+                );
+                updates[1] += 1;
             }
-            None => (),
         }
     }
     info!(

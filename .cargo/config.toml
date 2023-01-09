@@ -1,7 +1,10 @@
 [target.mips-unknown-linux-musl]
-linker = "/home/david/openwrt-sdk-21.02.3-ath79-generic_gcc-8.4.0_musl.Linux-x86_64/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc"
+#linker = "/mnt/HDD/openwrt-openwrt-21.02/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc"
+linker = "/mnt/HDD/openwrt-22.03.0/staging_dir/toolchain-mips_24kc_gcc-11.2.0_musl/bin/mips-openwrt-linux-gcc"
 
 [env]
-CC_mips-unknown-linux-musl = { value = "/home/david/openwrt-sdk-21.02.3-ath79-generic_gcc-8.4.0_musl.Linux-x86_64/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc", forced = true }
-MIPS_UNKNOWN_LINUX_MUSL_OPENSSL_DIR = { value = "/home/david/openwrt-sdk-21.02.3-ath79-generic_gcc-8.4.0_musl.Linux-x86_64/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/", forced = true }
+#CC_mips-unknown-linux-musl = { value = "/mnt/HDD/openwrt-openwrt-21.02/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc", forced = true }
+#MIPS_UNKNOWN_LINUX_MUSL_OPENSSL_DIR = { value = "/mnt/HDD/openwrt-openwrt-21.02/staging_dir/target-mips_24kc_musl/usr/", forced = true }
+CC_mips-unknown-linux-musl = { value = "/mnt/HDD/openwrt-22.03.0/staging_dir/toolchain-mips_24kc_gcc-11.2.0_musl/bin/mips-openwrt-linux-gcc", forced = true }
+MIPS_UNKNOWN_LINUX_MUSL_OPENSSL_DIR = { value = "/mnt/HDD/openwrt-22.03.0/staging_dir/target-mips_24kc_musl/usr", forced = true }
 # CROSS_COMPILE = { value = "mips-openwrt-linux-musl", force = true }

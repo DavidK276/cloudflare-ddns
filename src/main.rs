@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::str::FromStr;
+use core::str::FromStr;
 
 use clap::Parser;
 use log::{debug, info, warn};
@@ -100,7 +100,7 @@ struct CfDnsConfig {
 }
 
 fn bearer_auth(api_token: &str) -> String {
-    format!("Bearer {}", api_token)
+    format!("Bearer {api_token}")
 }
 
 fn get_current_ip(version: IPVersion, method: &IPLookupMethod) -> Result<IpAddr, Box<dyn Error>> {
@@ -139,15 +139,13 @@ fn get_records_of_type(
     api_token: &str,
     dns_type: &str,
 ) -> Result<HashMap<String, CfRecord>, Box<dyn Error>> {
-    let url = format!("{}{}/dns_records", API_ENDPOINT, zone_uuid);
-    let response = minreq::get(&url)
+    let url = format!("{API_ENDPOINT}{zone_uuid}/dns_records");
+    let response = minreq::get(url)
         .with_header("Authorization", bearer_auth(api_token))
         .with_param("type", dns_type)
         .send()?;
     let cf_res_a: CfResponse = serde_json::from_str(response.as_str()?)?;
-    if !cf_res_a.success {
-        panic!("Failed retrieving A zone records: {}", response.as_str()?);
-    }
+    assert!(cf_res_a.success, "Failed retrieving A zone records: {}", response.as_str()?);
     let mut result: HashMap<String, CfRecord> = HashMap::new();
     result.reserve(cf_res_a.result.len());
     for record_obj in cf_res_a.result {
@@ -163,9 +161,7 @@ fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, Box<dyn
         .with_param("name", zone_name)
         .send()?;
     let cf_res: CfResponse = serde_json::from_str(res.as_str()?)?;
-    if !cf_res.success {
-        panic!("Failed retrieving zone info: {}", res.as_str()?);
-    }
+    assert!(cf_res.success, "Failed retrieving zone info: {}", res.as_str()?);
     let zone_obj = cf_res.result[0].clone();
     let zone_info: CfZoneInfo = serde_json::from_value(zone_obj)?;
     Ok(zone_info)
@@ -178,15 +174,14 @@ fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), Box<dy
         "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
     ));
     match logger_config.set_time_offset_to_local() {
-        Ok(l) => l,
-        Err(l) => l,
+        Err(l) | Ok(l) => l,
     };
     let log_dir_path = format!("{}/log", &cwd);
     match fs::read_dir(&log_dir_path) {
         Ok(_) => (),
         Err(_) => fs::create_dir(format!("{}/log", &cwd))?,
     };
-    let log_file_path = format!("{}/{}.log", log_dir_path, zone_name);
+    let log_file_path = format!("{log_dir_path}/{zone_name}.log");
     let log_file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -206,9 +201,10 @@ fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), Box<dy
 fn main() -> Result<(), Box<dyn Error>> {
     let cwd = current_dir()?.to_string_lossy().to_string();
     let zone = ZoneArgs::parse();
-    let path = match zone.path {
-        Some(value) => value,
-        None => format!("{}/zones/{}.json", &cwd, zone.name),
+    let path = if let Some(value) = zone.path {
+        value
+    } else {
+        format!("{}/zones/{}.json", &cwd, zone.name)
     };
     let file_str = File::open(path)?;
     let config: CfDnsConfig = serde_json::from_reader(&file_str)?;
@@ -248,17 +244,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             IPVersion::IPv4 => records_a.get(&name),
             IPVersion::IPv6 => records_aaaa.get(&name),
         };
-        let record = match record_opt {
-            Some(r) => r,
-            None => {
-                warn!(
-                    "Record {} with type {} not found in zone, skipping",
-                    name,
-                    String::from(config_record.dns_type)
-                );
-                updates[1] += 1;
-                continue;
-            }
+        let record = if let Some(r) = record_opt { r } else {
+            warn!(
+                "Record {} with type {} not found in zone, skipping",
+                name,
+                String::from(config_record.dns_type)
+            );
+            updates[1] += 1;
+            continue;
         };
         let ttl = match config_record.ttl {
             Some(ttl) => {
@@ -286,7 +279,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
         debug!("Updating record {} with content: {}", record.name, new_ip);
-        let url = format!("{}{}/dns_records/{}", API_ENDPOINT, zone_info.id, record.id);
+        let url = format!("{API_ENDPOINT}{}/dns_records/{}", zone_info.id, record.id);
         let body = json!({
             "ttl": ttl,
             "name": name,

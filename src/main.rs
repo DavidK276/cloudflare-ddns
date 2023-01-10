@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::env::current_dir;
+use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use clap::Parser;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use rsdns::clients as dns;
 use rsdns::{constants::Class, records::data::Aaaa, records::data::A};
 use serde::Deserialize;
@@ -24,25 +25,9 @@ const DNS_RESOLVER_IPV4_QUERY: &str = "myip.opendns.com";
 const DNS_RESOLVER_IPV6_IP: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2620, 0, 0xccc, 0, 0, 0, 0, 0x2));
 const DNS_RESOLVER_IPV6_QUERY: &str = "resolver1.ipv6-sandbox.opendns.com";
 
-#[derive(thiserror::Error, Debug)]
-enum CfDdnsError {
-    #[error("file error: {0}")]
-    File(#[from] std::io::Error),
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("parse error: {0}")]
-    Parse(#[from] log::ParseLevelError),
-    #[error("logger error: {0}")]
-    Logger(#[from] log::SetLoggerError),
-    #[error("http error: {0}")]
-    Http(#[from] minreq::Error),
-    #[error("dns error: {0}")]
-    Dns(#[from] rsdns::Error),
-}
-
 #[derive(Parser)]
 #[clap(author = "David Krchňavý", version, about = "Cloudflare DNS info updater", long_about = None)]
-struct Zone {
+struct ZoneArgs {
     #[clap(short = 'z', long = "zone", value_parser)]
     name: String,
     #[clap(short = 'c', long = "config", value_parser)]
@@ -57,13 +42,21 @@ enum IPVersion {
     IPv6,
 }
 
-impl IPVersion {
-    fn record_type(&self) -> String {
-        match self {
+impl From<IPVersion> for String {
+    fn from(value: IPVersion) -> Self {
+        match value {
             IPVersion::IPv4 => String::from("A"),
             IPVersion::IPv6 => String::from("AAAA"),
         }
     }
+}
+
+#[derive(Deserialize, Debug)]
+enum IPLookupMethod {
+    #[serde(rename = "https")]
+    Https,
+    #[serde(rename = "dns")]
+    Dns,
 }
 
 #[derive(Deserialize, Debug)]
@@ -103,90 +96,68 @@ struct CfDnsConfig {
     #[serde(rename = "cf_records")]
     records: Vec<CfDnsConfigRecord>,
     log_level: String,
-    resolving_method: String,
+    resolving_method: IPLookupMethod,
 }
 
 fn bearer_auth(api_token: &str) -> String {
     format!("Bearer {}", api_token)
 }
 
-fn get_current_ip(version: IPVersion, method: &str) -> Result<IpAddr, CfDdnsError> {
-    return match version {
+fn get_current_ip(version: IPVersion, method: &IPLookupMethod) -> Result<IpAddr, Box<dyn Error>> {
+    match version {
         IPVersion::IPv4 => match method {
-            "http" => {
+            IPLookupMethod::Https => {
                 let res = minreq::get(HTTP_RESOLVER_IPV4).send()?;
-                Ok(IpAddr::V4(
-                    res.as_str()?.trim().to_string().parse().unwrap(),
-                ))
+                Ok(IpAddr::V4(res.as_str()?.trim().to_string().parse()?))
             }
-            "dns" => {
+            IPLookupMethod::Dns => {
                 let nameserver = SocketAddr::new(DNS_RESOLVER_IPV4_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
                 let rrset = client.query_rrset::<A>(DNS_RESOLVER_IPV4_QUERY, Class::In)?;
                 Ok(IpAddr::V4(rrset.rdata[0].address))
             }
-            _ => panic!("Invalid resolving method in config"),
         },
         IPVersion::IPv6 => match method {
-            "http" => {
+            IPLookupMethod::Https => {
                 let res = minreq::get(HTTP_RESOLVER_IPV6).send()?;
-                Ok(IpAddr::V6(
-                    res.as_str()?.trim().to_string().parse().unwrap(),
-                ))
+                Ok(IpAddr::V6(res.as_str()?.trim().to_string().parse()?))
             }
-            "dns" => {
+            IPLookupMethod::Dns => {
                 let nameserver = SocketAddr::new(DNS_RESOLVER_IPV6_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
                 let rrset = client.query_rrset::<Aaaa>(DNS_RESOLVER_IPV6_QUERY, Class::In)?;
                 Ok(IpAddr::V6(rrset.rdata[0].address))
             }
-            _ => panic!("Invalid resolving method in config"),
         },
-    };
+    }
 }
 
-type DnsRecords = (HashMap<String, CfRecord>, HashMap<String, CfRecord>);
-
-fn get_zone_records(zone_uuid: &str, api_token: &str) -> Result<DnsRecords, CfDdnsError> {
+fn get_records_of_type(
+    zone_uuid: &str,
+    api_token: &str,
+    dns_type: &str,
+) -> Result<HashMap<String, CfRecord>, Box<dyn Error>> {
     let url = format!("{}{}/dns_records", API_ENDPOINT, zone_uuid);
-    let res_a = minreq::get(&url)
+    let response = minreq::get(&url)
         .with_header("Authorization", bearer_auth(api_token))
-        .with_param("type", "A")
+        .with_param("type", dns_type)
         .send()?;
-    let cf_res_a: CfResponse = serde_json::from_str(res_a.as_str()?)?;
+    let cf_res_a: CfResponse = serde_json::from_str(response.as_str()?)?;
     if !cf_res_a.success {
-        panic!("Failed retrieving A zone records: {}", res_a.as_str()?);
+        panic!("Failed retrieving A zone records: {}", response.as_str()?);
     }
-    let mut result_a: HashMap<String, CfRecord> = HashMap::new();
-    result_a.reserve(cf_res_a.result.len());
+    let mut result: HashMap<String, CfRecord> = HashMap::new();
+    result.reserve(cf_res_a.result.len());
     for record_obj in cf_res_a.result {
         let record: CfRecord = serde_json::from_value(record_obj)?;
-        result_a.insert(record.name.clone(), record);
+        result.insert(record.name.clone(), record);
     }
-
-    let res_aaaa = minreq::get(url)
-        .with_header("Authorization", bearer_auth(api_token))
-        .with_param("type", "AAAA")
-        .send()?;
-    let cf_res_aaaa: CfResponse = serde_json::from_str(res_aaaa.as_str()?)?;
-    if !cf_res_aaaa.success {
-        panic!(
-            "Failed retrieving AAAA zone records: {}",
-            res_aaaa.as_str()?
-        );
-    }
-    let mut result_aaaa: HashMap<String, CfRecord> = HashMap::new();
-    result_aaaa.reserve(cf_res_aaaa.result.len());
-    for record_obj in cf_res_aaaa.result {
-        let record: CfRecord = serde_json::from_value(record_obj)?;
-        result_aaaa.insert(record.name.clone(), record);
-    }
-    Ok((result_a, result_aaaa))
+    Ok(result)
 }
 
-fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, CfDdnsError> {
+fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, Box<dyn Error>> {
     let res = minreq::get(API_ENDPOINT)
         .with_header("Authorization", bearer_auth(api_token))
         .with_param("name", zone_name)
@@ -200,7 +171,7 @@ fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, CfDdnsE
     Ok(zone_info)
 }
 
-fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), CfDdnsError> {
+fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), Box<dyn Error>> {
     let log_level = LevelFilter::from_str(log_level)?;
     let mut logger_config = simplelog::ConfigBuilder::new();
     logger_config.set_time_format_custom(format_description!(
@@ -229,12 +200,12 @@ fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), CfDdns
             ColorChoice::Auto,
         ),
     ])?;
-   Ok(())
+    Ok(())
 }
 
-fn main() -> Result<(), CfDdnsError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let cwd = current_dir()?.to_string_lossy().to_string();
-    let zone = Zone::parse();
+    let zone = ZoneArgs::parse();
     let path = match zone.path {
         Some(value) => value,
         None => format!("{}/zones/{}.json", &cwd, zone.name),
@@ -246,7 +217,8 @@ fn main() -> Result<(), CfDdnsError> {
 
     let zone_info = get_zone_info(&zone.name, &config.api_token)?;
     debug!("Zone {} info retrieved", zone_info.name);
-    let (records_a, records_aaaa) = get_zone_records(&zone_info.id, &config.api_token)?;
+    let records_a = get_records_of_type(&zone_info.id, &config.api_token, "A")?;
+    let records_aaaa = get_records_of_type(&zone_info.id, &config.api_token, "AAAA")?;
     debug!(
         "Zone {} records retrieved, A: {}, AAAA: {}",
         zone_info.name,
@@ -272,23 +244,21 @@ fn main() -> Result<(), CfDdnsError> {
         } else {
             format!("{}.{}", config_record.name, zone_info.name)
         };
-        let record = match config_record.dns_type {
-            IPVersion::IPv4 => match records_a.get(&name) {
-                Some(r) => r,
-                None => {
-                    warn!("Record {} with type A not found in zone, skipping", name);
-                    updates[1] += 1;
-                    continue;
-                }
-            },
-            IPVersion::IPv6 => match records_aaaa.get(&name) {
-                Some(r) => r,
-                None => {
-                    warn!("Record {} with type AAAA not found in zone, skipping", name);
-                    updates[1] += 1;
-                    continue;
-                }
-            },
+        let record_opt = match config_record.dns_type {
+            IPVersion::IPv4 => records_a.get(&name),
+            IPVersion::IPv6 => records_aaaa.get(&name),
+        };
+        let record = match record_opt {
+            Some(r) => r,
+            None => {
+                warn!(
+                    "Record {} with type {} not found in zone, skipping",
+                    name,
+                    String::from(config_record.dns_type)
+                );
+                updates[1] += 1;
+                continue;
+            }
         };
         let ttl = match config_record.ttl {
             Some(ttl) => {
@@ -307,8 +277,8 @@ fn main() -> Result<(), CfDdnsError> {
             None => record.ttl,
         };
         let (old_ip, new_ip) = match config_record.dns_type {
-            IPVersion::IPv4 => (IpAddr::V4(record.content.parse().unwrap()), current_ipv4),
-            IPVersion::IPv6 => (IpAddr::V6(record.content.parse().unwrap()), current_ipv6),
+            IPVersion::IPv4 => (IpAddr::V4(record.content.parse()?), current_ipv4),
+            IPVersion::IPv6 => (IpAddr::V6(record.content.parse()?), current_ipv6),
         };
         if old_ip == new_ip && record.ttl == ttl && record.proxied == config_record.proxied {
             debug!("Update of record {} not needed, skipping", record.name);
@@ -320,7 +290,7 @@ fn main() -> Result<(), CfDdnsError> {
         let body = json!({
             "ttl": ttl,
             "name": name,
-            "type": config_record.dns_type.record_type(),
+            "type": String::from(config_record.dns_type),
             "content": new_ip,
             "proxied": config_record.proxied
         });

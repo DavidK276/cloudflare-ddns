@@ -1,15 +1,13 @@
+use core::str::FromStr;
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::error::Error;
 use std::fs;
 use std::fs::File;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use core::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use clap::Parser;
 use log::{debug, info, warn};
-use rsdns::clients as dns;
-use rsdns::{constants::Class, records::data::Aaaa, records::data::A};
 use serde::Deserialize;
 use serde_json::json;
 use simplelog::{
@@ -20,9 +18,13 @@ use simplelog::{
 const API_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/zones/";
 const HTTP_RESOLVER_IPV4: &str = "https://ipv4.icanhazip.com";
 const HTTP_RESOLVER_IPV6: &str = "https://ipv6.icanhazip.com";
+#[cfg(feature = "dns")]
 const DNS_RESOLVER_IPV4_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(208, 67, 222, 222));
+#[cfg(feature = "dns")]
 const DNS_RESOLVER_IPV4_QUERY: &str = "myip.opendns.com";
+#[cfg(feature = "dns")]
 const DNS_RESOLVER_IPV6_IP: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2620, 0, 0xccc, 0, 0, 0, 0, 0x2));
+#[cfg(feature = "dns")]
 const DNS_RESOLVER_IPV6_QUERY: &str = "resolver1.ipv6-sandbox.opendns.com";
 
 #[derive(Parser)]
@@ -110,12 +112,20 @@ fn get_current_ip(version: IPVersion, method: &IPLookupMethod) -> Result<IpAddr,
                 let res = minreq::get(HTTP_RESOLVER_IPV4).send()?;
                 Ok(IpAddr::V4(res.as_str()?.trim().to_string().parse()?))
             }
+            #[cfg(feature = "dns")]
             IPLookupMethod::Dns => {
-                let nameserver = SocketAddr::new(DNS_RESOLVER_IPV4_IP, 53);
+                use rsdns::clients as dns;
+                use rsdns::{constants::Class, records::data::A};
+                let nameserver = std::net::SocketAddr::new(DNS_RESOLVER_IPV4_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
                 let rrset = client.query_rrset::<A>(DNS_RESOLVER_IPV4_QUERY, Class::In)?;
                 Ok(IpAddr::V4(rrset.rdata[0].address))
+            }
+            #[cfg(not(feature = "dns"))]
+            #[allow(unreachable_patterns)]
+            IPLookupMethod::Dns => {
+                panic!("Dns feature not enabled!");
             }
         },
         IPVersion::IPv6 => match method {
@@ -123,12 +133,20 @@ fn get_current_ip(version: IPVersion, method: &IPLookupMethod) -> Result<IpAddr,
                 let res = minreq::get(HTTP_RESOLVER_IPV6).send()?;
                 Ok(IpAddr::V6(res.as_str()?.trim().to_string().parse()?))
             }
+            #[cfg(feature = "dns")]
             IPLookupMethod::Dns => {
-                let nameserver = SocketAddr::new(DNS_RESOLVER_IPV6_IP, 53);
+                use rsdns::clients as dns;
+                use rsdns::{constants::Class, records::data::Aaaa};
+                let nameserver = std::net::SocketAddr::new(DNS_RESOLVER_IPV6_IP, 53);
                 let mut client =
                     dns::std::Client::new(dns::ClientConfig::with_nameserver(nameserver))?;
                 let rrset = client.query_rrset::<Aaaa>(DNS_RESOLVER_IPV6_QUERY, Class::In)?;
                 Ok(IpAddr::V6(rrset.rdata[0].address))
+            }
+            #[cfg(not(feature = "dns"))]
+            #[allow(unreachable_patterns)]
+            IPLookupMethod::Dns => {
+                panic!("Dns feature not enabled!");
             }
         },
     }
@@ -145,7 +163,11 @@ fn get_records_of_type(
         .with_param("type", dns_type)
         .send()?;
     let cf_res_a: CfResponse = serde_json::from_str(response.as_str()?)?;
-    assert!(cf_res_a.success, "Failed retrieving A zone records: {}", response.as_str()?);
+    assert!(
+        cf_res_a.success,
+        "Failed retrieving A zone records: {}",
+        response.as_str()?
+    );
     let mut result: HashMap<String, CfRecord> = HashMap::new();
     result.reserve(cf_res_a.result.len());
     for record_obj in cf_res_a.result {
@@ -161,7 +183,11 @@ fn get_zone_info(zone_name: &str, api_token: &str) -> Result<CfZoneInfo, Box<dyn
         .with_param("name", zone_name)
         .send()?;
     let cf_res: CfResponse = serde_json::from_str(res.as_str()?)?;
-    assert!(cf_res.success, "Failed retrieving zone info: {}", res.as_str()?);
+    assert!(
+        cf_res.success,
+        "Failed retrieving zone info: {}",
+        res.as_str()?
+    );
     let zone_obj = cf_res.result[0].clone();
     let zone_info: CfZoneInfo = serde_json::from_value(zone_obj)?;
     Ok(zone_info)
@@ -199,7 +225,8 @@ fn logger_init(log_level: &str, cwd: &str, zone_name: &str) -> Result<(), Box<dy
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let cwd = current_dir()?.to_string_lossy().to_string();
+    let path = current_dir()?;
+    let cwd = path.to_string_lossy();
     let zone = ZoneArgs::parse();
     let path = if let Some(value) = zone.path {
         value
@@ -209,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file_str = File::open(path)?;
     let config: CfDnsConfig = serde_json::from_reader(&file_str)?;
 
-    logger_init(config.log_level.as_str(), cwd.as_str(), zone.name.as_str())?;
+    logger_init(config.log_level.as_str(), &cwd, zone.name.as_str())?;
 
     let zone_info = get_zone_info(&zone.name, &config.api_token)?;
     debug!("Zone {} info retrieved", zone_info.name);
@@ -244,7 +271,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             IPVersion::IPv4 => records_a.get(&name),
             IPVersion::IPv6 => records_aaaa.get(&name),
         };
-        let record = if let Some(r) = record_opt { r } else {
+        let record = if let Some(r) = record_opt {
+            r
+        } else {
             warn!(
                 "Record {} with type {} not found in zone, skipping",
                 name,
